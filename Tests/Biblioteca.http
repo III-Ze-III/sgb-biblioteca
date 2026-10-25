@@ -1,0 +1,50 @@
+@url = http://localhost:5000
+
+@livroId = 1
+@leitorId = 1
+@emprestimoId = 1
+
+### Cadastrar livro
+POST {{url}}/livros
+Content-Type: application/json
+
+{"titulo":"Dom Casmurro","autor":"Machado de Assis","ano":1899}
+
+### Listar livros
+GET {{url}}/livros
+
+### Consultar livro
+GET {{url}}/livros/{{livroId}}
+
+### Alterar livro
+PUT {{url}}/livros/{{livroId}}
+Content-Type: application/json
+
+{"titulo":"Dom Casmurro","autor":"Machado de Assis","ano":1900}
+
+### Cadastrar leitor
+POST {{url}}/leitores
+Content-Type: application/json
+
+{"nome":"Ana Souza","email":"ana@example.com"}
+
+### Listar leitores
+GET {{url}}/leitores
+
+### Registrar empréstimo
+POST {{url}}/emprestimos
+Content-Type: application/json
+
+{"livroId":{{livroId}},"leitorId":{{leitorId}}}
+
+### Listar empréstimos
+GET {{url}}/emprestimos
+
+### Consultar livros disponíveis
+GET {{url}}/livros/disponiveis
+
+### Devolver livro
+PUT {{url}}/emprestimos/{{emprestimoId}}/devolucao
+
+### Excluir livro 
+DELETE {{url}}/livros/{{livroId}}
