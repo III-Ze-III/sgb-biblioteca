@@ -27,5 +27,10 @@ export function createApi(base = '/api', fetchImpl = globalThis.fetch) {
     updateBook: (id, data) => request(`/livros/${id}`, 'PUT', data),
     deleteBook: id => request(`/livros/${id}`, 'DELETE'),
     available: () => request('/livros/disponiveis'),
+    readers: () => request('/leitores'),
+    reader: id => request(`/leitores/${id}`),
+    createReader: data => request('/leitores', 'POST', data),
+    loans: () => request('/emprestimos'),
+    createLoan: data => request('/emprestimos', 'POST', data),
   };
 }

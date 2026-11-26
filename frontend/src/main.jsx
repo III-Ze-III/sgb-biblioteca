@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createApi } from './api.js';
-import { BookForm } from './Forms.jsx';
+import { BookForm, ReaderForm, LoanForm } from './Forms.jsx';
 import './styles.css';
 
 const api = createApi(import.meta.env.VITE_API_URL || '/api');
 const glyphs = {
   book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5M8 7h8m-8 4h6',
+  users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-4M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zm6 0a4 4 0 0 1-3 4m0-8a4 4 0 0 1 3 4',
+  exchange: 'M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4',
   plus: 'M12 5v14M5 12h14',
   search: 'M21 21l-4.5-4.5m2.5-5.5a8 8 0 1 1-16 0 8 8 0 0 1 16 0z',
   sync: 'M20 7v5h-5M4 17v-5h5m-4-2a8 8 0 0 1 13-4l2 2M4 16l2 2a8 8 0 0 0 13-4',
@@ -17,8 +19,11 @@ function Icon({ name, size = 20 }) {
 }
 const pages = {
   acervo: ['Acervo', 'book', 'Consulte os títulos, cadastre novos livros e veja o que está disponível.'],
+  leitores: ['Leitores', 'users', 'Cadastre leitores ou consulte quem já tem acesso ao acervo.'],
+  emprestimos: ['Empréstimos', 'exchange', 'Registre a retirada de livros e consulte o histórico de circulação.'],
 };
-const blank = { books: [], available: [] };
+const blank = { books: [], readers: [], loans: [], available: [] };
+const date = value => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short' }).format(new Date(value)) : '—';
 const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR');
 const matches = (query, ...values) => values.some(value => normalize(value).includes(normalize(query.trim())));
 const currentPage = () => Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : 'acervo';
@@ -67,10 +72,10 @@ function App() {
     const index = ++loadIndex.current;
     setState(old => ({ ...old, loading: true, error: '' }));
     try {
-      const [books, available] = await Promise.all([api.books(), api.available()]);
-      if (![books, available].every(Array.isArray)) throw new Error('A API devolveu uma lista inválida.');
+      const [books, readers, loans, available] = await Promise.all([api.books(), api.readers(), api.loans(), api.available()]);
+      if (![books, readers, loans, available].every(Array.isArray)) throw new Error('A API devolveu uma lista inválida.');
       if (index === loadIndex.current) {
-        setData({ books, available });
+        setData({ books, readers, loans, available });
         setState({ loading: false, error: '', ready: true });
       }
     } catch (error) {
@@ -90,7 +95,7 @@ function App() {
     const index = ++dialogIndex.current;
     setDialog({ type: 'loading', error: '' });
     try {
-      const item = await api.book(id);
+      const item = await (type === 'book' ? api.book(id) : api.reader(id));
       if (index === dialogIndex.current) setDialog({ type: edit ? 'editBook' : type, item, error: '' });
     } catch (error) {
       if (index === dialogIndex.current) setDialog({ type: 'loading', error: error.message });
@@ -111,13 +116,24 @@ function App() {
     }
   }
 
+  const bookById = new Map(data.books.map(book => [book.id, book]));
+  const readerById = new Map(data.readers.map(reader => [reader.id, reader]));
   const availableIds = new Set(data.available.map(book => book.id));
+  const bookName = loan => bookById.get(loan.livroId)?.titulo ?? `Livro #${loan.livroId}`;
+  const readerName = loan => readerById.get(loan.leitorId)?.nome ?? `Leitor #${loan.leitorId}`;
+  const latestLoans = [...data.loans].sort((a, b) => b.id - a.id);
   const displayBooks = (availableOnly ? data.available : data.books).filter(item => matches(query, item.titulo, item.autor, item.ano, item.id));
+  const displayReaders = data.readers.filter(item => matches(query, item.nome, item.email, item.id));
+  const displayLoans = latestLoans.filter(item => matches(query, bookName(item), readerName(item), item.id));
+  const loanTable = list => <Table labels={['Livro e leitor', 'Empréstimo', 'Devolução', 'Status']}>
+    {list.map(item => <tr key={item.id}><td><strong>{bookName(item)}</strong><span>{readerName(item)} · #{item.id}</span></td><td>{date(item.dataEmprestimo)}</td><td>{date(item.dataDevolucao)}</td><td><Badge active={item.dataDevolucao != null} yes="Devolvido" no="Em aberto" /></td></tr>)}
+  </Table>;
   const count = value => state.ready ? value : '—';
   const copy = {
     loading: 'Consulta', newBook: 'Cadastrar livro', editBook: 'Editar livro', book: 'Detalhes do livro', deleteBook: 'Excluir livro',
+    newReader: 'Cadastrar leitor', reader: 'Detalhes do leitor', newLoan: 'Registrar empréstimo',
   };
-  const action = { acervo: ['Novo livro', 'newBook'] }[page];
+  const action = { acervo: ['Novo livro', 'newBook'], leitores: ['Novo leitor', 'newReader'], emprestimos: ['Novo empréstimo', 'newLoan'] }[page];
 
   return <>
     <a className="skip" href="#conteudo" onClick={e => { e.preventDefault(); heading.current?.focus(); }}>Ir para o conteúdo</a>
@@ -139,6 +155,14 @@ function App() {
         <div className="panel-head"><div><h2>Catálogo de livros</h2><p>{count(displayBooks.length)} {displayBooks.length === 1 ? 'título' : 'títulos'}</p></div><div className="tools"><Search value={query} onChange={setQuery} label="Buscar livros" placeholder="Título, autor ou ID" /><label className="toggle"><input type="checkbox" checked={availableOnly} onChange={e => setAvailableOnly(e.target.checked)} /> Só disponíveis</label></div></div>
         {displayBooks.length ? <Table labels={['Livro', 'Ano', 'Disponibilidade', 'Ações']}>{displayBooks.map(item => <tr key={item.id}><td><button className="row-title" onClick={() => details('book', item.id)}>{item.titulo}</button><span>{item.autor} · #{item.id}</span></td><td>{item.ano}</td><td><Badge active={availableIds.has(item.id)} yes="Disponível" no="Emprestado" /></td><td><div className="row-actions"><button onClick={() => details('book', item.id, true)} aria-label={`Editar ${item.titulo}`}>Editar</button><button onClick={() => opened('deleteBook', item)} aria-label={`Excluir ${item.titulo}`}>Excluir</button></div></td></tr>)}</Table> : !state.error && <Empty title={state.loading ? 'Carregando acervo…' : 'Nenhum livro encontrado'} text="Tente outra busca ou cadastre um novo título." />}
       </section>}
+      {page === 'leitores' && <section className="panel">
+        <div className="panel-head"><div><h2>Lista de leitores</h2><p>{count(displayReaders.length)} {displayReaders.length === 1 ? 'leitor' : 'leitores'}</p></div><Search value={query} onChange={setQuery} label="Buscar leitores" placeholder="Nome, e-mail ou ID" /></div>
+        {displayReaders.length ? <Table labels={['Leitor', 'E-mail', 'ID']}>{displayReaders.map(item => <tr key={item.id}><td><button className="row-title" onClick={() => details('reader', item.id)}>{item.nome}</button></td><td>{item.email}</td><td>#{item.id}</td></tr>)}</Table> : !state.error && <Empty title={state.loading ? 'Carregando leitores…' : 'Nenhum leitor encontrado'} text="Tente outra busca ou comece cadastrando um leitor." />}
+      </section>}
+      {page === 'emprestimos' && <section className="panel">
+        <div className="panel-head"><div><h2>Histórico de empréstimos</h2><p>{count(displayLoans.length)} {displayLoans.length === 1 ? 'registro' : 'registros'}</p></div><Search value={query} onChange={setQuery} label="Buscar empréstimos" placeholder="Livro, leitor ou ID" /></div>
+        {displayLoans.length ? loanTable(displayLoans) : !state.error && <Empty title={state.loading ? 'Carregando empréstimos…' : 'Nenhum registro encontrado'} text="Novos empréstimos ficam disponíveis no histórico." />}
+      </section>}
       <footer>Biblioteca · Gestão de acervo e circulação</footer>
     </main>
     {dialog && <Dialog title={copy[dialog.type]} busy={busy} dismiss={dismiss}>
@@ -146,7 +170,10 @@ function App() {
       {dialog.type === 'loading' && !dialog.error && <p role="status">Consultando a API…</p>}
       {dialog.type === 'newBook' && <BookForm busy={busy} save={value => mutate(() => api.createBook(value), 'Livro cadastrado.')} />}
       {dialog.type === 'editBook' && <BookForm busy={busy} item={dialog.item} save={value => mutate(() => api.updateBook(dialog.item.id, value), 'Livro atualizado.')} />}
+      {dialog.type === 'newReader' && <ReaderForm busy={busy} save={value => mutate(() => api.createReader(value), 'Leitor cadastrado.')} />}
+      {dialog.type === 'newLoan' && <LoanForm data={data} busy={busy} save={value => mutate(() => api.createLoan(value), 'Empréstimo registrado.')} />}
       {dialog.type === 'book' && <dl className="details"><dt>Título</dt><dd>{dialog.item.titulo}</dd><dt>Autor(a)</dt><dd>{dialog.item.autor}</dd><dt>Ano</dt><dd>{dialog.item.ano}</dd><dt>ID</dt><dd>#{dialog.item.id}</dd></dl>}
+      {dialog.type === 'reader' && <dl className="details"><dt>Nome</dt><dd>{dialog.item.nome}</dd><dt>E-mail</dt><dd>{dialog.item.email}</dd><dt>ID</dt><dd>#{dialog.item.id}</dd></dl>}
       {dialog.type === 'deleteBook' && <><p>Excluir <strong>{dialog.item.titulo}</strong> do acervo? Esta ação não pode ser desfeita. Livros com histórico de empréstimos não podem ser excluídos.</p><div className="dialog-actions"><button className="button secondary" onClick={dismiss} disabled={busy} autoFocus>Cancelar</button><button className="button danger" disabled={busy} onClick={() => mutate(() => api.deleteBook(dialog.item.id), 'Livro excluído.')}>{busy ? 'Excluindo…' : 'Excluir livro'}</button></div></>}
     </Dialog>}
   </>;
