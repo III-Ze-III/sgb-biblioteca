@@ -1,0 +1,155 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { createApi } from './api.js';
+import { BookForm } from './Forms.jsx';
+import './styles.css';
+
+const api = createApi(import.meta.env.VITE_API_URL || '/api');
+const glyphs = {
+  book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5M8 7h8m-8 4h6',
+  plus: 'M12 5v14M5 12h14',
+  search: 'M21 21l-4.5-4.5m2.5-5.5a8 8 0 1 1-16 0 8 8 0 0 1 16 0z',
+  sync: 'M20 7v5h-5M4 17v-5h5m-4-2a8 8 0 0 1 13-4l2 2M4 16l2 2a8 8 0 0 0 13-4',
+  close: 'm6 6 12 12M18 6 6 18',
+};
+function Icon({ name, size = 20 }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={glyphs[name]} /></svg>;
+}
+const pages = {
+  acervo: ['Acervo', 'book', 'Consulte os títulos, cadastre novos livros e veja o que está disponível.'],
+};
+const blank = { books: [], available: [] };
+const normalize = value => String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR');
+const matches = (query, ...values) => values.some(value => normalize(value).includes(normalize(query.trim())));
+const currentPage = () => Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : 'acervo';
+
+function Dialog({ title, children, dismiss, busy }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    dialog.showModal();
+    return () => { if (dialog.open) dialog.close(); };
+  }, []);
+  return <dialog ref={ref} aria-labelledby="dialog-title" onCancel={event => { event.preventDefault(); if (!busy) dismiss(); }} onClick={event => { if (event.target === event.currentTarget && !busy) dismiss(); }}>
+    <div className="dialog-body">
+      <div className="dialog-head"><h2 id="dialog-title">{title}</h2><button className="icon-button" type="button" onClick={dismiss} disabled={busy} aria-label="Fechar"><Icon name="close" /></button></div>
+      {children}
+    </div>
+  </dialog>;
+}
+
+function Empty({ title, text }) {
+  return <div className="empty"><Icon name="search" size={26} /><strong>{title}</strong><p>{text}</p></div>;
+}
+function Search({ value, onChange, placeholder, label }) {
+  return <label className="search"><Icon name="search" size={18} /><input type="search" aria-label={label} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)} /></label>;
+}
+function Table({ labels, children }) {
+  return <div className="table-scroll" role="region" aria-label="Tabela de resultados" tabIndex={0}><table><thead><tr>{labels.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;
+}
+function Badge({ active, yes, no }) {
+  return <span className={`badge ${active ? 'badge-green' : 'badge-gold'}`}><i />{active ? yes : no}</span>;
+}
+function App() {
+  const [page, setPage] = useState(currentPage);
+  const [data, setData] = useState(blank);
+  const [state, setState] = useState({ loading: true, error: '', ready: false });
+  const [query, setQuery] = useState('');
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const [dialog, setDialog] = useState(null);
+  const [result, setResult] = useState('');
+  const [busy, setBusy] = useState(false);
+  const loadIndex = useRef(0);
+  const dialogIndex = useRef(0);
+  const heading = useRef(null);
+
+  const refresh = useCallback(async () => {
+    const index = ++loadIndex.current;
+    setState(old => ({ ...old, loading: true, error: '' }));
+    try {
+      const [books, available] = await Promise.all([api.books(), api.available()]);
+      if (![books, available].every(Array.isArray)) throw new Error('A API devolveu uma lista inválida.');
+      if (index === loadIndex.current) {
+        setData({ books, available });
+        setState({ loading: false, error: '', ready: true });
+      }
+    } catch (error) {
+      if (index === loadIndex.current) setState(old => ({ loading: false, error: error.message, ready: old.ready }));
+    }
+  }, []);
+  useEffect(() => { refresh(); return () => { loadIndex.current++; }; }, [refresh]);
+  useEffect(() => {
+    const change = () => { setPage(currentPage()); setQuery(''); setAvailableOnly(false); setResult(''); requestAnimationFrame(() => heading.current?.focus()); };
+    addEventListener('hashchange', change);
+    return () => removeEventListener('hashchange', change);
+  }, []);
+
+  const opened = (type, item) => { dialogIndex.current++; setDialog({ type, item, error: '' }); };
+  const dismiss = () => { dialogIndex.current++; setDialog(null); };
+  async function details(type, id, edit = false) {
+    const index = ++dialogIndex.current;
+    setDialog({ type: 'loading', error: '' });
+    try {
+      const item = await api.book(id);
+      if (index === dialogIndex.current) setDialog({ type: edit ? 'editBook' : type, item, error: '' });
+    } catch (error) {
+      if (index === dialogIndex.current) setDialog({ type: 'loading', error: error.message });
+    }
+  }
+  async function mutate(action, message) {
+    setBusy(true);
+    setDialog(old => ({ ...old, error: '' }));
+    try {
+      await action();
+      dismiss();
+      setResult(message);
+      await refresh();
+    } catch (error) {
+      setDialog(old => old && ({ ...old, error: error.message }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const availableIds = new Set(data.available.map(book => book.id));
+  const displayBooks = (availableOnly ? data.available : data.books).filter(item => matches(query, item.titulo, item.autor, item.ano, item.id));
+  const count = value => state.ready ? value : '—';
+  const copy = {
+    loading: 'Consulta', newBook: 'Cadastrar livro', editBook: 'Editar livro', book: 'Detalhes do livro', deleteBook: 'Excluir livro',
+  };
+  const action = { acervo: ['Novo livro', 'newBook'] }[page];
+
+  return <>
+    <a className="skip" href="#conteudo" onClick={e => { e.preventDefault(); heading.current?.focus(); }}>Ir para o conteúdo</a>
+    <aside className="sidebar">
+      <a className="brand" href="#acervo"><div className="brand-mark"><Icon name="book" size={24} /></div><div><strong>Biblioteca</strong><small>Gestão do acervo</small></div></a>
+      <p className="nav-title">ESPAÇO DE TRABALHO</p>
+      <nav aria-label="Navegação principal">{Object.entries(pages).map(([key, [label, glyph]]) => <a key={key} href={`#${key}`} aria-current={page === key ? 'page' : undefined}><Icon name={glyph} /><span>{label}</span></a>)}</nav>
+      <div className="sidebar-foot"><span className={`status-dot ${state.error ? 'offline' : ''}`} />{state.loading ? 'Atualizando dados' : state.error ? 'Falha ao carregar' : 'API conectada'}</div>
+    </aside>
+    <main id="conteudo">
+      <header className="page-head">
+        <div><div className="eyebrow">SISTEMA DE BIBLIOTECA</div><h1 ref={heading} tabIndex="-1">{pages[page][0]}</h1><p>{pages[page][2]}</p></div>
+        <div className="header-controls"><button className="button secondary" onClick={refresh} disabled={state.loading}><Icon name="sync" size={17} /><span>Atualizar</span></button>{action && <button className="button primary" onClick={() => opened(action[1])} disabled={!state.ready}><Icon name="plus" size={18} />{action[0]}</button>}</div>
+      </header>
+      {state.loading && <p className="sr-only" role="status">Carregando dados da biblioteca…</p>}
+      {state.error && <div className="notice error" role="alert">{state.error} {state.ready && 'Os dados abaixo são da última leitura.'} <button className="text-button" onClick={refresh}>Tentar novamente</button></div>}
+      {result && <div className="notice success" role="status">{result}<button className="icon-button" onClick={() => setResult('')} aria-label="Dispensar confirmação"><Icon name="close" size={16} /></button></div>}
+      {page === 'acervo' && <section className="panel">
+        <div className="panel-head"><div><h2>Catálogo de livros</h2><p>{count(displayBooks.length)} {displayBooks.length === 1 ? 'título' : 'títulos'}</p></div><div className="tools"><Search value={query} onChange={setQuery} label="Buscar livros" placeholder="Título, autor ou ID" /><label className="toggle"><input type="checkbox" checked={availableOnly} onChange={e => setAvailableOnly(e.target.checked)} /> Só disponíveis</label></div></div>
+        {displayBooks.length ? <Table labels={['Livro', 'Ano', 'Disponibilidade', 'Ações']}>{displayBooks.map(item => <tr key={item.id}><td><button className="row-title" onClick={() => details('book', item.id)}>{item.titulo}</button><span>{item.autor} · #{item.id}</span></td><td>{item.ano}</td><td><Badge active={availableIds.has(item.id)} yes="Disponível" no="Emprestado" /></td><td><div className="row-actions"><button onClick={() => details('book', item.id, true)} aria-label={`Editar ${item.titulo}`}>Editar</button><button onClick={() => opened('deleteBook', item)} aria-label={`Excluir ${item.titulo}`}>Excluir</button></div></td></tr>)}</Table> : !state.error && <Empty title={state.loading ? 'Carregando acervo…' : 'Nenhum livro encontrado'} text="Tente outra busca ou cadastre um novo título." />}
+      </section>}
+      <footer>Biblioteca · Gestão de acervo e circulação</footer>
+    </main>
+    {dialog && <Dialog title={copy[dialog.type]} busy={busy} dismiss={dismiss}>
+      {dialog.error && <div className="notice error" role="alert">{dialog.error}</div>}
+      {dialog.type === 'loading' && !dialog.error && <p role="status">Consultando a API…</p>}
+      {dialog.type === 'newBook' && <BookForm busy={busy} save={value => mutate(() => api.createBook(value), 'Livro cadastrado.')} />}
+      {dialog.type === 'editBook' && <BookForm busy={busy} item={dialog.item} save={value => mutate(() => api.updateBook(dialog.item.id, value), 'Livro atualizado.')} />}
+      {dialog.type === 'book' && <dl className="details"><dt>Título</dt><dd>{dialog.item.titulo}</dd><dt>Autor(a)</dt><dd>{dialog.item.autor}</dd><dt>Ano</dt><dd>{dialog.item.ano}</dd><dt>ID</dt><dd>#{dialog.item.id}</dd></dl>}
+      {dialog.type === 'deleteBook' && <><p>Excluir <strong>{dialog.item.titulo}</strong> do acervo? Esta ação não pode ser desfeita. Livros com histórico de empréstimos não podem ser excluídos.</p><div className="dialog-actions"><button className="button secondary" onClick={dismiss} disabled={busy} autoFocus>Cancelar</button><button className="button danger" disabled={busy} onClick={() => mutate(() => api.deleteBook(dialog.item.id), 'Livro excluído.')}>{busy ? 'Excluindo…' : 'Excluir livro'}</button></div></>}
+    </Dialog>}
+  </>;
+}
+
+createRoot(document.getElementById('root')).render(<App />);
