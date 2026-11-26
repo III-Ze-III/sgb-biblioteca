@@ -32,5 +32,6 @@ export function createApi(base = '/api', fetchImpl = globalThis.fetch) {
     createReader: data => request('/leitores', 'POST', data),
     loans: () => request('/emprestimos'),
     createLoan: data => request('/emprestimos', 'POST', data),
+    returnLoan: id => request(`/emprestimos/${id}/devolucao`, 'PUT'),
   };
 }
